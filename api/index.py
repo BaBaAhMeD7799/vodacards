@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from pymongo import MongoClient
 import telebot
 from telebot import types
@@ -107,68 +106,72 @@ def callback_handler(call):
             f"• الأكواد المتاحة للبيع: <b>{total - used}</b>"
         )
 
-# ----------------- المسارات (Endpoints) -----------------
+# ----------------- معالجة الطلبات -----------------
 @app.get("/")
 @app.get("/api")
 @app.get("/api/")
 def home():
     return {"status": "online", "message": "Vodafone License Server is Running"}
 
-# استقبال تحديثات تيليجرام
-@app.post("/webhook")
-@app.post("/api/webhook")
-async def telegram_webhook(request: Request):
+@app.post("/")
+@app.post("/api")
+@app.post("/api/")
+async def handle_incoming_requests(request: Request):
     try:
-        data = await request.json()
-        update = telebot.types.Update.de_json(data)
-        bot.process_new_updates([update])
-    except Exception as e:
-        print("Webhook processing error:", e)
-    return {"ok": True}
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid JSON"}
 
-# فحص كود التفعيل من تطبيق Flutter
-class VerifyRequest(BaseModel):
-    key: str
-    device_id: str
+    # 1. إذا كان الطلب وارداً من تيليجرام
+    if "update_id" in body:
+        try:
+            update = telebot.types.Update.de_json(body)
+            bot.process_new_updates([update])
+        except Exception as e:
+            print("Error:", e)
+        return {"ok": True}
 
-@app.post("/verify")
-@app.post("/api/verify")
-async def verify_license(req: VerifyRequest):
-    key_doc = keys_col.find_one({"key": req.key.strip()})
+    # 2. إذا كان الطلب وارداً من تطبيق Flutter لفحص الكود
+    if "key" in body and "device_id" in body:
+        key_str = str(body.get("key", "")).strip()
+        dev_id = str(body.get("device_id", "")).strip()
 
-    if not key_doc:
-        raise HTTPException(status_code=400, detail="❌ المفتاح غير صحيح")
+        key_doc = keys_col.find_one({"key": key_str})
 
-    if not key_doc.get("active", True):
-        raise HTTPException(status_code=403, detail="🚫 تم إيقاف هذا المفتاح")
+        if not key_doc:
+            raise HTTPException(status_code=400, detail="❌ المفتاح غير صحيح")
 
-    now = datetime.utcnow()
+        if not key_doc.get("active", True):
+            raise HTTPException(status_code=403, detail="🚫 تم إيقاف هذا المفتاح")
 
-    # أول تفعيل للكود
-    if not key_doc.get("first_used_at"):
-        expires = now + timedelta(days=key_doc["duration_days"])
-        keys_col.update_one(
-            {"_id": key_doc["_id"]},
-            {"$set": {
-                "device_id": req.device_id,
-                "first_used_at": now,
-                "expires_at": expires
-            }}
-        )
+        now = datetime.utcnow()
+
+        if not key_doc.get("first_used_at"):
+            expires = now + timedelta(days=key_doc["duration_days"])
+            keys_col.update_one(
+                {"_id": key_doc["_id"]},
+                {"$set": {
+                    "device_id": dev_id,
+                    "first_used_at": now,
+                    "expires_at": expires
+                }}
+            )
+            return {
+                "status": "success",
+                "message": "تم التفعيل بنجاح",
+                "expires_at": expires.isoformat()
+            }
+
+        if key_doc.get("device_id") != dev_id:
+            raise HTTPException(status_code=403, detail="⚠️ هذا المفتاح مستخدم على جهاز آخر")
+
+        if now > key_doc["expires_at"]:
+            raise HTTPException(status_code=403, detail="⏳ انتهت صلاحية المفتاح")
+
         return {
             "status": "success",
-            "message": "تم التفعيل بنجاح",
-            "expires_at": expires.isoformat()
+            "message": "المفتاح صالح",
+            "expires_at": key_doc["expires_at"].isoformat()
         }
 
-    if key_doc.get("device_id") != req.device_id:
-        raise HTTPException(status_code=403, detail="⚠️ هذا المفتاح مستخدم على جهاز آخر")
-
-    if now > key_doc["expires_at"]:
-        raise HTTPException(status_code=403, detail="⏳ انتهت صلاحية المفتاح")
-
-    return {
-        "status": "success",
-        "message": "المفتاح صالح",
-        "expires_at": key_doc["expires_at"].isoformat()
-    }
+    return {"message": "Unknown request format"}
