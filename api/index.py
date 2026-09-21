@@ -14,7 +14,7 @@ BOT_TOKEN = "8786799664:AAGNS38ZHNiSoKfvOAXdgy1gRahGELaKAsU"
 ADMIN_ID = 8036210671
 MONGO_URI = "mongodb+srv://engahmedbakr79_db_user:fpOps4E4HpCg1tnd@bakrvfcards.iipsjbv.mongodb.net/?retryWrites=true&w=majority&appName=BAKRVFCARDS"
 
-# ضبط الاتصال بمهلة 5 ثوانٍ لتفادي خروج Vercel عن الوقت المحدد
+# ضبط مهلة قاعدة البيانات لـ 5 ثوانٍ
 client = MongoClient(
     MONGO_URI,
     serverSelectionTimeoutMS=5000,
@@ -25,7 +25,9 @@ client = MongoClient(
 db = client["vodafone_licenses"]
 keys_col = db["keys"]
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+# هام جداً لـ Vercel: إيقاف الـ Threads ليعمل الكود بشكل متزامن قبل إغلاق الدالة
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False)
+
 app = FastAPI(title="Vodafone Cards API")
 
 app.add_middleware(
@@ -46,7 +48,10 @@ def generate_key_string():
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ عذراً، هذا البوت مخصص للمسؤول فقط.")
+        bot.reply_to(
+            message,
+            f"⛔ عذراً، هذا البوت مخصص للمسؤول فقط.\nآيدي حسابك هو: <code>{message.from_user.id}</code>"
+        )
         return
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -62,7 +67,6 @@ def start_cmd(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    # إيقاف مؤشر التحميل على الزر في تطبيق تيليجرام فوراً
     try:
         bot.answer_callback_query(call.id)
     except Exception:
@@ -124,7 +128,7 @@ def callback_handler(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"⚠️ خطأ في جلب الإحصائيات:\n<code>{str(e)}</code>")
 
-# ----------------- المسارات البرمجية -----------------
+# ----------------- مسارات الـ API -----------------
 @app.get("/")
 @app.get("/api")
 @app.get("/api/")
@@ -138,18 +142,18 @@ async def handle_incoming_requests(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return {"error": "Invalid JSON"}
+        return {"ok": False, "error": "Invalid JSON"}
 
-    # معالجة طلبات تيليجرام
+    # معالجة رسائل تيليجرام
     if "update_id" in body:
         try:
             update = telebot.types.Update.de_json(body)
             bot.process_new_updates([update])
         except Exception as e:
-            print("Update error:", e)
+            print("Webhook update error:", e)
         return {"ok": True}
 
-    # معالجة طلب فحص الكود من تطبيق Flutter
+    # معالجة فحص التفعيل من Flutter
     if "key" in body and "device_id" in body:
         key_str = str(body.get("key", "")).strip()
         dev_id = str(body.get("device_id", "")).strip()
