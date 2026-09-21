@@ -107,20 +107,23 @@ def callback_handler(call):
             f"• الأكواد المتاحة للبيع: <b>{total - used}</b>"
         )
 
-# ----------------- المسارات البرمجية (Endpoints) -----------------
+# ----------------- المسارات (Endpoints) -----------------
 @app.get("/")
+@app.get("/api")
+@app.get("/api/")
 def home():
     return {"status": "online", "message": "Vodafone License Server is Running"}
 
-# استقبال تحديثات التيليجرام (Webhook)
+# استقبال تحديثات تيليجرام
+@app.post("/webhook")
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = telebot.types.Update.de_json(data)
         bot.process_new_updates([update])
-    except Exception:
-        pass
+    except Exception as e:
+        print("Webhook processing error:", e)
     return {"ok": True}
 
 # فحص كود التفعيل من تطبيق Flutter
@@ -128,6 +131,7 @@ class VerifyRequest(BaseModel):
     key: str
     device_id: str
 
+@app.post("/verify")
 @app.post("/api/verify")
 async def verify_license(req: VerifyRequest):
     key_doc = keys_col.find_one({"key": req.key.strip()})
