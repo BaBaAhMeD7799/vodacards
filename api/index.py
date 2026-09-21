@@ -14,8 +14,14 @@ BOT_TOKEN = "8786799664:AAGNS38ZHNiSoKfvOAXdgy1gRahGELaKAsU"
 ADMIN_ID = 8036210671
 MONGO_URI = "mongodb+srv://engahmedbakr79_db_user:fpOps4E4HpCg1tnd@bakrvfcards.iipsjbv.mongodb.net/?retryWrites=true&w=majority&appName=BAKRVFCARDS"
 
-# ----------------- الاتصال بقاعدة البيانات -----------------
-client = MongoClient(MONGO_URI)
+# ضبط الاتصال بمهلة 5 ثوانٍ لتفادي خروج Vercel عن الوقت المحدد
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=5000,
+    socketTimeoutMS=5000,
+    tlsAllowInvalidCertificates=True
+)
 db = client["vodafone_licenses"]
 keys_col = db["keys"]
 
@@ -56,6 +62,12 @@ def start_cmd(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+    # إيقاف مؤشر التحميل على الزر في تطبيق تيليجرام فوراً
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
     if call.from_user.id != ADMIN_ID:
         return
 
@@ -78,35 +90,41 @@ def callback_handler(call):
     elif call.data.startswith("gen_"):
         days = int(call.data.split("_")[1])
         key = generate_key_string()
-        keys_col.insert_one({
-            "key": key,
-            "duration_days": days,
-            "device_id": None,
-            "active": True,
-            "created_at": datetime.utcnow(),
-            "first_used_at": None,
-            "expires_at": None
-        })
-        bot.send_message(
-            call.message.chat.id,
-            f"✅ <b>تم إنشاء كود جديد بنجاح!</b>\n\n"
-            f"🔑 الكود: <code>{key}</code> (اضغط للنسخ)\n"
-            f"⏳ المدة: <b>{days} يوم</b> (يبدأ العد التنازلي عند أول تفعيل)\n"
-            f"📱 الربط: يربط بجهاز العميل تلقائياً عند أول فتح."
-        )
+        try:
+            keys_col.insert_one({
+                "key": key,
+                "duration_days": days,
+                "device_id": None,
+                "active": True,
+                "created_at": datetime.utcnow(),
+                "first_used_at": None,
+                "expires_at": None
+            })
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ <b>تم إنشاء كود جديد بنجاح!</b>\n\n"
+                f"🔑 الكود: <code>{key}</code> (اضغط للنسخ)\n"
+                f"⏳ المدة: <b>{days} يوم</b> (يبدأ العد التنازلي عند أول تفعيل)\n"
+                f"📱 الربط: يربط بجهاز العميل تلقائياً عند أول فتح."
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"⚠️ خطأ في الاتصال بقاعدة البيانات:\n<code>{str(e)}</code>")
 
     elif call.data == "btn_stats":
-        total = keys_col.count_documents({})
-        used = keys_col.count_documents({"device_id": {"$ne": None}})
-        bot.send_message(
-            call.message.chat.id,
-            f"📊 <b>إحصائيات الأكواد:</b>\n\n"
-            f"• إجمالي الأكواد: <b>{total}</b>\n"
-            f"• الأكواد المفعلة على أجهزة: <b>{used}</b>\n"
-            f"• الأكواد المتاحة للبيع: <b>{total - used}</b>"
-        )
+        try:
+            total = keys_col.count_documents({})
+            used = keys_col.count_documents({"device_id": {"$ne": None}})
+            bot.send_message(
+                call.message.chat.id,
+                f"📊 <b>إحصائيات الأكواد:</b>\n\n"
+                f"• إجمالي الأكواد: <b>{total}</b>\n"
+                f"• الأكواد المفعلة على أجهزة: <b>{used}</b>\n"
+                f"• الأكواد المتاحة للبيع: <b>{total - used}</b>"
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"⚠️ خطأ في جلب الإحصائيات:\n<code>{str(e)}</code>")
 
-# ----------------- معالجة الطلبات -----------------
+# ----------------- المسارات البرمجية -----------------
 @app.get("/")
 @app.get("/api")
 @app.get("/api/")
@@ -122,21 +140,24 @@ async def handle_incoming_requests(request: Request):
     except Exception:
         return {"error": "Invalid JSON"}
 
-    # 1. إذا كان الطلب وارداً من تيليجرام
+    # معالجة طلبات تيليجرام
     if "update_id" in body:
         try:
             update = telebot.types.Update.de_json(body)
             bot.process_new_updates([update])
         except Exception as e:
-            print("Error:", e)
+            print("Update error:", e)
         return {"ok": True}
 
-    # 2. إذا كان الطلب وارداً من تطبيق Flutter لفحص الكود
+    # معالجة طلب فحص الكود من تطبيق Flutter
     if "key" in body and "device_id" in body:
         key_str = str(body.get("key", "")).strip()
         dev_id = str(body.get("device_id", "")).strip()
 
-        key_doc = keys_col.find_one({"key": key_str})
+        try:
+            key_doc = keys_col.find_one({"key": key_str})
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
         if not key_doc:
             raise HTTPException(status_code=400, detail="❌ المفتاح غير صحيح")
