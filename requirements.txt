@@ -1,5 +1,4 @@
 fastapi
-uvicorn
 pyTelegramBotAPI
 pymongo[srv]
 pydantic
